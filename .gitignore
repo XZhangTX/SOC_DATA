@@ -1,0 +1,68 @@
+# === Python 基本忽略 ===
+__pycache__/
+*.py[cod]
+*$py.class
+
+# 虚拟环境
+venv/
+env/
+.venv/
+.env/
+
+# Jupyter Notebook 检查点
+.ipynb_checkpoints/
+
+# IDE/编辑器配置
+.vscode/
+.idea/
+*.swp
+
+# 构建与打包
+build/
+dist/
+*.egg-info/
+.eggs/
+*.manifest
+*.spec
+
+# 日志与缓存
+*.log
+*.tmp
+*.bak
+*.DS_Store
+Thumbs.db
+
+# 单元测试
+.coverage
+htmlcov/
+.tox/
+.pytest_cache/
+
+# 环境配置
+.env.local
+.env.production
+.env.test
+
+# === 你自定义的忽略项 ===
+# 不上传 CSV / Excel 文件
+*.csv
+*.xls
+*.xlsx
+*.pt
+
+# 不上传图片文件
+*.png
+*.jpg
+*.jpeg
+*.gif
+*.bmp
+*.svg
+*.tif
+*.tiff
+
+# 如果你有数据文件夹，可以整文件夹忽略（取消注释以启用）
+data/
+runs/
+
+# === 如果用 git-lfs 追踪大文件，可保留以下注释 ===
+# *.zip filter=lfs diff=lfs merge=lfs -text
