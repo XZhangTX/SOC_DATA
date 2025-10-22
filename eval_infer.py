@@ -44,8 +44,8 @@ def derive_freq_labels(csv_path: Path, n_freq: int):
 
 def main():
     ap = argparse.ArgumentParser(description="Evaluate checkpoint on combined CSVs and save results per run")
-    ap.add_argument('--ckpt', type=str, default='checkpoints/best.pt', help='Path to checkpoint')
-    ap.add_argument('--data-dir', type=str, default='data/combined', help='Directory with combined_*.csv or val.csv')
+    ap.add_argument('--ckpt', type=str, default='checkpoints1/best_original.pt', help='Path to checkpoint')
+    ap.add_argument('--data-dir', type=str, default='data/combined/', help='Directory with combined_*.csv or a single CSV file path')
     ap.add_argument('--train-csv', type=str, default=None, help='Optional train.csv to compute amp normalization stats')
     ap.add_argument('--out-root', type=str, default='runs', help='Root folder for outputs')
     ap.add_argument('--tag', type=str, default=None, help='Optional tag for output folder name')
@@ -60,24 +60,29 @@ def main():
     n_freq = ckpt.get('n_freq')
     assert n_freq is not None, 'Checkpoint missing n_freq'
 
+    attn_type = cfg.get('attn_type', 'vanilla')
     model = ITransformerEncoder(
         d_in=3,
-        d_model=cfg.get('d_model', 31),
+        d_model=cfg.get('d_model', 128),
         nhead=cfg.get('nhead', 8),
         num_layers=cfg.get('layers', 4),
-        dim_feedforward=cfg.get('ffn', 128),
+        dim_feedforward=cfg.get('ffn', 256),
         dropout=cfg.get('dropout', 0.1),
         use_layernorm=True,
         n_freq=n_freq,
+        attn_type=attn_type,
     ).to(device)
     model.load_state_dict(ckpt['model'])
 
-    data_dir = Path(args.data_dir)
-    # Prefer combined_*.csv, else val.csv
-    files = sorted(data_dir.glob('combined_*.csv'))
-    if not files and (data_dir / 'val.csv').exists():
-        files = [data_dir / 'val.csv']
-    assert files, f'No evaluation files found in {data_dir}'
+    data_path = Path(args.data_dir)
+    # Accept a single file path or a directory
+    if data_path.is_file():
+        files = [data_path]
+    else:
+        files = sorted(data_path.glob('combined_*.csv'))
+        if not files and (data_path / 'val.csv').exists():
+            files = [data_path / 'val.csv']
+    assert files, f'No evaluation files found in {data_path}'
 
     # Output directory
     stamp = args.tag or datetime.now().strftime('%Y%m%d-%H%M%S')
@@ -124,4 +129,3 @@ def main():
 
 if __name__ == '__main__':
     main()
-

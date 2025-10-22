@@ -3,7 +3,17 @@ import torch.nn as nn
 import numpy as np
 from math import sqrt
 from utils.masking import TriangularCausalMask, ProbMask
-from reformer_pytorch import LSHSelfAttention
+try:
+    from reformer_pytorch import LSHSelfAttention
+except Exception:
+    # Fallback stub so the module imports without the optional dependency.
+    class LSHSelfAttention(nn.Module):
+        def __init__(self, *args, **kwargs):
+            super().__init__()
+            self._available = False
+
+        def forward(self, x, *args, **kwargs):
+            raise ImportError("reformer_pytorch not installed; ReformerLayer is unavailable")
 from einops import rearrange
 
 

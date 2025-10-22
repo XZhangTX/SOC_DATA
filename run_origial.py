@@ -16,24 +16,6 @@ from sklearn.metrics import mean_absolute_error, mean_squared_error
 from tqdm import tqdm
 
 
-# -------- Reproducibility --------
-def set_seed(seed: int):
-    """Set seeds for python, numpy, torch to improve reproducibility."""
-    import os as _os
-    import random as _random
-    import numpy as _np
-    import torch as _torch
-
-    _os.environ["PYTHONHASHSEED"] = str(seed)
-    _random.seed(seed)
-    _np.random.seed(seed)
-    _torch.manual_seed(seed)
-    _torch.cuda.manual_seed_all(seed)
-    # Deterministic behavior for cuDNN (may impact speed)
-    _torch.backends.cudnn.deterministic = True
-    _torch.backends.cudnn.benchmark = False
-
-
 # -------- Dataset --------
 class SpectrumSOCDataset(Dataset):
     def __init__(self, csv_path: str, amp_stats: Optional[Tuple[np.ndarray, np.ndarray]] = None):
@@ -49,7 +31,7 @@ class SpectrumSOCDataset(Dataset):
         X_flat = df[cols[:-1]].astype(np.float32).values  # [N, 3*L]
         y = df[cols[-1]].astype(np.float32).values        # [N]
 
-        assert X_flat.shape[1] % 3 == 0, "特征维的倍数(amp,sin,cos)"
+        assert X_flat.shape[1] % 3 == 0, "特征维应为3的倍数(amp,sin,cos)"
         n_freq = X_flat.shape[1] // 3
         X = X_flat.reshape(len(df), n_freq, 3)
 
@@ -107,12 +89,10 @@ class ITransformerEncoder(nn.Module):
         dim_feedforward: int = 256,
         dropout: float = 0.1,
         use_layernorm: bool = True,
-        n_freq: int = 512,
-        attn_type: str = "vanilla"  # 'vanilla' | 'flow' | 'full' | 'prob'
+        n_freq: int = 512
     ):
         super().__init__()
         self.n_freq = n_freq
-        self.attn_type = attn_type
 
         # token embedding
         self.proj = nn.Linear(d_in, d_model)
@@ -134,57 +114,15 @@ class ITransformerEncoder(nn.Module):
         )
         self.last_freq_attn: Optional[torch.Tensor] = None
 
-        if attn_type == "vanilla":
-            encoder_layer = nn.TransformerEncoderLayer(
-                d_model=d_model,
-                nhead=nhead,
-                dim_feedforward=dim_feedforward,
-                dropout=dropout,
-                batch_first=True,
-                norm_first=True
-            )
-            self.encoder = nn.TransformerEncoder(encoder_layer, num_layers=num_layers)
-            self._use_custom = False
-        else:
-            # Build custom encoder stack using Flow/Full/Prob attention
-            from layers.SelfAttention_Family import AttentionLayer, FlowAttention, FullAttention, ProbAttention
-
-            class _Block(nn.Module):
-                def __init__(self, d_model, nhead, d_ff, dropout, attn_type: str):
-                    super().__init__()
-                    if attn_type == "flow":
-                        inner = FlowAttention(attention_dropout=dropout)
-                        self.mask_flag = False
-                    elif attn_type == "full":
-                        inner = FullAttention(mask_flag=False, attention_dropout=dropout, output_attention=False)
-                        self.mask_flag = False
-                    elif attn_type == "prob":
-                        inner = ProbAttention(mask_flag=False, factor=5, attention_dropout=dropout, output_attention=False)
-                        self.mask_flag = False
-                    else:
-                        raise ValueError(f"Unsupported attn_type: {attn_type}")
-                    self.attn = AttentionLayer(inner, d_model, n_heads=nhead)
-                    self.dropout = nn.Dropout(dropout)
-                    self.norm1 = nn.LayerNorm(d_model)
-                    self.ffn = nn.Sequential(
-                        nn.Linear(d_model, d_ff),
-                        nn.GELU(),
-                        nn.Dropout(dropout),
-                        nn.Linear(d_ff, d_model),
-                    )
-                    self.norm2 = nn.LayerNorm(d_model)
-
-                def forward(self, x):
-                    out, _ = self.attn(x, x, x, attn_mask=None)
-                    x = self.norm1(x + self.dropout(out))
-                    y = self.ffn(x)
-                    x = self.norm2(x + self.dropout(y))
-                    return x
-
-            self.blocks = nn.ModuleList([
-                _Block(d_model, nhead, dim_feedforward, dropout, attn_type) for _ in range(num_layers)
-            ])
-            self._use_custom = True
+        encoder_layer = nn.TransformerEncoderLayer(
+            d_model=d_model,
+            nhead=nhead,
+            dim_feedforward=dim_feedforward,
+            dropout=dropout,
+            batch_first=True,
+            norm_first=True
+        )
+        self.encoder = nn.TransformerEncoder(encoder_layer, num_layers=num_layers)
 
         self.norm = nn.LayerNorm(d_model) if use_layernorm else nn.Identity()
         self.head = nn.Sequential(
@@ -221,11 +159,7 @@ class ITransformerEncoder(nn.Module):
         # positional encoding (include CLS)
         h = self.pos_enc(h)
 
-        if self._use_custom:
-            for blk in self.blocks:
-                h = blk(h)
-        else:
-            h = self.encoder(h)                 # [B, 1+L, d_model]
+        h = self.encoder(h)                     # [B, 1+L, d_model]
         h_cls = self.norm(h[:, 0, :])           # [B, d_model]
         y = self.head(h_cls).squeeze(-1)        # [B]
         return y
@@ -277,8 +211,6 @@ def evaluate(model, loader, device, collect_attn: bool = False, collect_preds: b
 
 
 def main(args):
-    # Set global random seeds before anything else
-    set_seed(args.seed)
     # Prefer combined_*.csv and split by cycle (group-aware). Fallbacks supported.
     comb_dir = os.path.join("data", "combined")
     files = sorted(Path(comb_dir).glob("combined_*.csv"))
@@ -310,7 +242,7 @@ def main(args):
         train_ds = SpectrumSOCDataset(train_path)
         amp_stats = (train_ds.amp_mean, train_ds.amp_std)
         val_ds = SpectrumSOCDataset(val_path, amp_stats=amp_stats)
-        assert train_ds.n_freq == val_ds.n_freq, "train/val 的频点数不一?"
+        assert train_ds.n_freq == val_ds.n_freq, "train/val 的频点数不一致"
         n_freq = train_ds.n_freq
     else:
         # fallback: split a single train.csv at sample level
@@ -345,8 +277,7 @@ def main(args):
         dim_feedforward=args.ffn,
         dropout=args.dropout,
         use_layernorm=True,
-        n_freq=n_freq,
-        attn_type=args.attn_type
+        n_freq=n_freq
     ).to(device)
 
     # Regression: L1 + L2 hybrid
@@ -359,7 +290,6 @@ def main(args):
     best_rmse = 1e9
     epochs_no_improve = 0
     os.makedirs("checkpoints", exist_ok=True)
-    
 
     for epoch in range(1, args.epochs + 1):
         def loss_fn(pred, target):
@@ -422,10 +352,11 @@ def main(args):
                 "val_rmse": float(rmse),
                 "train_loss": float(train_loss),
             }
-            # Save/overwrite best.pt for convenience and also keep a timestamped snapshot
-            torch.save(payload, "checkpoints/best.pt")
+            # Save/overwrite best.pt for convenience
+            torch.save(payload, "checkpoints1/best_original.pt")
+            # Also save an individual, timestamped checkpoint
             stamp = datetime.now().strftime("%Y%m%d-%H%M%S")
-            uniq = f"checkpoints/ckpt_epoch{epoch:03d}_rmse{rmse:.4f}_{stamp}.pt"
+            uniq = f"checkpoints1/ckpt_epoch{epoch:03d}_rmse{rmse:.4f}_{stamp}.pt"
             torch.save(payload, uniq)
             print(f"  ✓ saved best to checkpoints/best.pt and {uniq}")
         else:
@@ -450,8 +381,5 @@ if __name__ == "__main__":
     p.add_argument("--save_attn", action="store_true")
     p.add_argument("--save_preds", action="store_true")
     p.add_argument("--patience", type=int, default=10)
-    p.add_argument("--seed", type=int, default=42)
-    
-    p.add_argument("--attn_type", type=str, default="flow", choices=["vanilla", "flow", "full", "prob"], help="Transformer attention type")
     args = p.parse_args()
     main(args)
